@@ -8,6 +8,19 @@ import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { allocateUserSeq } from "@/storage/seq";
 import { sessionDelete } from "@/app/session/sessionDelete";
 
+// OpenCode provider detection and validation
+const OPENCODE_PROVIDERS = ['opencode', 'openai', 'anthropic', 'google', 'cohere'];
+const isOpenCodeProvider = (metadata: string): boolean => {
+    try {
+        // Attempt to parse metadata (may be encrypted, so fail gracefully)
+        const parsed = JSON.parse(metadata);
+        return parsed.provider && OPENCODE_PROVIDERS.includes(parsed.provider.toLowerCase());
+    } catch {
+        // Metadata is encrypted or not parseable, cannot determine provider
+        return false;
+    }
+};
+
 export function sessionRoutes(app: Fastify) {
 
     // Sessions API
@@ -373,5 +386,53 @@ export function sessionRoutes(app: Fastify) {
         }
 
         return reply.send({ success: true });
+    });
+
+    // OpenCode provider detection endpoint
+    app.get('/v1/sessions/:sessionId/provider', {
+        schema: {
+            params: z.object({
+                sessionId: z.string()
+            })
+        },
+        preHandler: app.authenticate
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { sessionId } = request.params;
+
+        // Verify session belongs to user
+        const session = await db.session.findFirst({
+            where: {
+                id: sessionId,
+                accountId: userId
+            },
+            select: {
+                metadata: true
+            }
+        });
+
+        if (!session) {
+            return reply.code(404).send({ error: 'Session not found' });
+        }
+
+        // Detect if this is an OpenCode provider session
+        const isOpencode = isOpenCodeProvider(session.metadata);
+
+        return reply.send({
+            sessionId,
+            provider: isOpencode ? 'opencode' : 'unknown',
+            isOpencodeProvider: isOpencode,
+            supportedFeatures: isOpencode ? {
+                multiProvider: true,
+                customModels: true,
+                streamingOptimization: true,
+                providerSwitching: true
+            } : {
+                multiProvider: false,
+                customModels: false,
+                streamingOptimization: false,
+                providerSwitching: false
+            }
+        });
     });
 }
